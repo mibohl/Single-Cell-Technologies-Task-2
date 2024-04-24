@@ -1,0 +1,28 @@
+---
+title: "SCT Task 2"
+author: "Michael Bohl"
+date: "2024-04-24"
+output: html_document
+---
+
+## IMPORTS, install libraries if needed
+```{r}
+required_libraries = c("Seurat", "Matrix", "dplyr")
+
+# Check if each library is installed and install it if not
+for (library_name in required_libraries) {
+  if (!requireNamespace(library_name, quietly = TRUE)) {
+    message(paste("Installing and loading library", library_name))
+    install.packages(library_name)
+  }
+  library(library_name, character.only = TRUE)
+}
+```
+
+## read in the data (rename the counts file to matrix.mtx.gtz)
+```{r}
+counts <- Read10X("./data", gene.column=1)
+meta <- read.table("./data/meta.tsv.gz")
+seurat <- CreateSeuratObject(counts, meta.data = meta)
+```
+
