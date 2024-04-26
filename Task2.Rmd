@@ -26,11 +26,4 @@ meta <- read.table("./data/meta.tsv.gz")
 seurat <- CreateSeuratObject(counts, meta.data = meta)
 ```
 
-```{r}
-seurat <- NormalizeData(seurat)
-# Test pushing to github
-```
-
-```{r}
-```
 
