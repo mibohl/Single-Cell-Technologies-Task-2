@@ -7,9 +7,9 @@ output: html_document
 
 ## IMPORTS, install libraries if needed
 ```{r}
-required_libraries = c("Seurat", "Matrix", "dplyr", "patchwork")
+required_libraries = c("BiocManager", "R.utils", "Seurat", "Matrix", "dplyr", "patchwork", "devtools", "simspec", "ggplot2", "ggrepel", "DESeq2", "scran", "pbapply")
 
-# Check if each library is installed and install it if not
+# load libraries and install from CRAN if necessary
 for (library_name in required_libraries) {
   if (!requireNamespace(library_name, quietly = TRUE)) {
     message(paste("Installing and loading library", library_name))
@@ -17,7 +17,17 @@ for (library_name in required_libraries) {
   }
   library(library_name, character.only = TRUE)
 }
+
+# libraries that are not available from CRAN
+# BiocManager::install("Seurat")
+# BiocManager::install("DESeq2")
+# BiocManager::install("scran")
+# devtools::install_github('quadbio/simspec')
+
 ```
+
+### Part 1. Descriptive analysis of the data set
+
 
 ## read in the data (rename the counts file to matrix.mtx.gtz)
 ```{r}
@@ -26,69 +36,37 @@ meta <- read.table("./data/meta.tsv.gz")
 seurat <- CreateSeuratObject(counts, meta.data = meta)
 ```
 
+
 ## routine processing
 ```{r}
 # Normalize, find variable features, remove cell cycle genes, and scale data
 seurat <- NormalizeData(seurat) %>%
   FindVariableFeatures(nfeatures = 3000) %>%
-  CellCycleScoring(s.features = cc.genes.updated.2019$s.genes,
-                   g2m.features = cc.genes.updated.2019$g2m.genes)
-VariableFeatures(seurat) <- setdiff(VariableFeatures(seurat),
-                                    c(unlist(cc.genes.updated.2019),
-                                    grep("^MT-", rownames(seurat), value=T)))
-seurat <- ScaleData(seurat, vars.to.regress = c("G2M.Score","S.Score")) %>%
+  CellCycleScoring(s.features = cc.genes.updated.2019$s.genes, g2m.features = cc.genes.updated.2019$g2m.genes)
+VariableFeatures(seurat) <- setdiff(VariableFeatures(seurat), c(unlist(cc.genes.updated.2019), grep("^MT-", rownames(seurat), value=T))) # remove cell cycle genes and mitochondrial genes
+
+seurat <- ScaleData(seurat, vars.to.regress = c("G2M.Score","S.Score")) %>% # regress out cell cycle scores
   RunPCA(npcs = 20) %>%
-  RunUMAP(dims = 1:20)
+  RunUMAP(dims = 1:20) 
 
 plot1 <- UMAPPlot(seurat, group.by="organoid") & NoAxes()
 plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), order=T) & NoAxes() & NoLegend()
 plot1 | plot2
 ```  
 
-## trying out different integration methods
 
-# Harmony
+## CSS integration
 ```{r}
-library(harmony)
-seurat_harmony <- RunHarmony(seurat, group.by.vars = "GLI3_status", nclust = 20)
-seurat_harmony <- RunUMAP(seurat_harmony, reduction = "harmony", dims = 1:ncol(Embeddings(seurat_harmony,"harmony")), reduction.name = "umap_harmony", reduction.key = "UMAPHARM_")
-
-# Visualize integrated data
-plot1 <- DimPlot(seurat_harmony, reduction = "umap_harmony", group.by="GLI3_status") & NoAxes()
-plot1 <- DimPlot(seurat_harmony, reduction = "umap_harmony", group.by="organoid") & NoAxes()
-plot2 <- FeaturePlot(seurat_harmony,  c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_harmony", order = T) & NoAxes() & NoLegend()
-plot1 | plot2
-```
-
-# MNN integration didn't work yet
-```{r}
-#library(SeuratWrappers)
-#seurat_samples <- SplitObject(seurat, "GLI3_status")
-#seurat_mnn <- RunFastMNN(seurat_samples)
-#seurat_mnn <- RunUMAP(seurat_mnn, reduction = "mnn", dims = 1:ncol(Embeddings(seurat,"mnn")), reduction.name = "umap_mnn", reduction.key = "UMAPMNN_")
-
-# Visualize integrated data
-#plot1 <- DimPlot(seurat_mnn, reduction = "umap_mnn", group.by="GLI3_status") & NoAxes()
-#plot1 <- DimPlot(seurat_mnn, reduction = "umap_mnn", group.by="organoid") & NoAxes()
-#plot2 <- FeaturePlot(seurat_mnn,  c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_mnn", order = T) & NoAxes() & NoLegend()
-#plot1 | plot2
-```
-
-
-
-
-# CSS
-```{r}
-library(simspec)
-seurat <- cluster_sim_spectrum(seurat, label_tag = "organoid", cluster_resolution = 1)
+seurat <- cluster_sim_spectrum(seurat, label_tag = "organoid", cluster_resolution = 1) 
 seurat <- RunUMAP(seurat, reduction = "css", dims = 1:ncol(Embeddings(seurat,"css")), reduction.name = "umap_css", reduction.key = "UMAPCSS_")
 plot1 <- DimPlot(seurat, reduction = "umap_css", group.by="GLI3_status") & NoAxes()
 plot1 <- DimPlot(seurat, reduction = "umap_css", group.by="organoid") & NoAxes()
 plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_css", order=T) & NoAxes() & NoLegend()
 plot1 | plot2
-
 ```
-### Cluster and annotate data
+
+
+## Cluster and annotate data
 ```{r}
 seurat <- FindNeighbors(seurat, reduction = "css", dims = 1:ncol(Embeddings(seurat,"css"))) %>%
   FindClusters(resolution = 0.9)
@@ -98,7 +76,8 @@ plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2"
                      reduction = "umap_css", order=T) & NoAxes() & NoLegend()
 plot1 | plot2
 
-seurat$region <- factor(setNames(c("ventral telen.",
+# TODO: annotate clusters, this is too inaccurate
+seurat@meta.data$region <- factor(setNames(c("ventral telen.",
                                    "ventral telen.",
                                    "non-telen.",
                                    "dorsal telen.",
@@ -116,14 +95,53 @@ seurat$region <- factor(setNames(c("ventral telen.",
                                    "mixed",
                                    "dorsal telen.",
                                    "non-telen.",
+                                   "dorsal telen.",
+                                   "non-telen.",
                                    "dorsal telen."),
                                  levels(seurat@active.ident))[seurat@active.ident],
                         levels=c("dorsal telen.","ventral telen.","non-telen.","mixed"))
 plot1 <- DimPlot(seurat, reduction = "umap_css", group.by = "region") & NoAxes()
-plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"),
-                     reduction = "umap_css", order=T) & NoAxes() & NoLegend()
+plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"), reduction = "umap_css", order=T) & NoAxes() & NoLegend()
 plot1 | plot2
-
 ```
 
+### Part 2. Comparison of cell type compositions between conditions
 
+## visually check cell type compositions
+```{r}
+freq <- table(seurat$region, seurat$organoid) # create a frequency table of annotated cell types
+prop <- apply(freq,2,function(x) x/sum(x)) # calculate the proportion of each cell type
+
+layout(matrix(1:3,nrow=1)); par(mar=c(8,5,1,1)) # set the layout for the plots
+barplot(freq, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Frequency", cex.names = 0.8)
+barplot(prop, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Proportion", cex.names = 0.8)
+plot.new()
+legend("left", fill=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"), legend=rownames(freq), bty="n")
+
+```
+# visible difference between WT and KO: ... (fix once clusters are annotated)
+
+
+## compare cells using Fisher's exact test
+```{r}
+freq_fisher <- function(conditions, have_identity){
+  freq <- table(factor(have_identity, levels=c(TRUE,FALSE)),
+                conditions)
+  test <- fisher.test(freq)
+  res <- setNames(c(test$estimate, test$p.value), c("oddsratio","pval_fisher"))
+  return(res)
+}
+
+region_enrichment <- data.frame(region = levels(seurat$region),
+                                # loop and test every region
+                                t(sapply(levels(seurat$region), function(region)
+                                  freq_fisher(conditions = factor(seurat$GLI3_status, levels=c("KO","WT")),
+                                              have_identity = seurat$region == region)
+                                )),
+                                row.names=NULL)
+region_enrichment$padj_fisher <- p.adjust(region_enrichment$pval_fisher)
+
+region_enrichment
+```
