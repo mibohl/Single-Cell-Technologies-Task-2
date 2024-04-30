@@ -7,7 +7,7 @@ output: html_document
 
 ## IMPORTS, install libraries if needed
 ```{r}
-required_libraries = c("BiocManager", "R.utils", "Seurat", "Matrix", "dplyr", "patchwork", "devtools", "simspec", "ggplot2", "ggrepel", "DESeq2", "scran", "pbapply", 'patchwork', 'DoubletFinder')
+required_libraries = c("BiocManager", "R.utils", "Seurat", "Matrix", "dplyr", "patchwork", "devtools", "simspec", "ggplot2", "ggrepel", "DESeq2", "scran", "pbapply", 'patchwork') # If something doesnt work, install through BiocManager::install("package_name")
 
 # load libraries and install from CRAN if necessary
 for (library_name in required_libraries) {
@@ -107,6 +107,12 @@ plot1
 plot2 # Some integration would be helpful looks like
 ```
 
+# Store seurat for integration
+```{r}
+seurat_raw <- seurat
+```
+
+
 
 ## CSS integration
 ```{r}
@@ -119,19 +125,38 @@ plot1 | plot2
 ```
 
 
-## Cluster and annotate data
-  # Cluster
+## Different integration methods
 ```{r}
-seurat <- FindNeighbors(seurat, reduction = "css", dims = 1:ncol(Embeddings(seurat,"css"))) %>%
-  FindClusters(resolution = 0.9)
-```
-  # Gene/Feature plots
-```{r}
-plot1 <- DimPlot(seurat, reduction = "umap_css", label = T) & NoAxes()
-plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"),
-                     reduction = "umap_css", order=T) & NoAxes() & NoLegend()
+# Define integration methods
+integration_methods <- c("CCAIntegration", "RPCAIntegration", "HarmonyIntegration", 
+                          "FastMNNIntegration", "scVIIntegration")
 
-plot1 | plot2
+integrated_objects <- list()
+
+for (method in integration_methods) {
+  integrated_object <- IntegrateLayers(
+    object = seurat_raw,
+    method = method,
+    orig.reduction = "pca",
+    
+    verbose = FALSE
+  )
+  integrated_objects[[method]] <- integrated_object
+}
+```
+  # Visualize integration methods
+```{r}
+integration_plots <- list()
+for (seurat_obj in integrated_objects) {
+  seurat_obj <- FindNeighbors(seurat_obj, reduction = "integrated.cca", dims = 1:20)
+  seurat_obj <- FindClusters(obj, resolution = 1.2, cluster.name = "cca_clusters") # Random resolution
+  # Store UMAP plots for each of the seurat objects into a list
+  
+}
+
+for (){
+  seurat_obj <- RunUMAP(seurat_obj, reduction = "integrated.cca", dims = 1:20)
+}
 ```
   # Comprehensive feature plot
 ```{r}
