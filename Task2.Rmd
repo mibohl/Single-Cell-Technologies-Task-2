@@ -159,7 +159,7 @@ for (){
   seurat_obj <- RunUMAP(seurat_obj, reduction = "integrated.cca", dims = 1:20)
 }
 ```
-  # Comprehensive feature plot
+  # Comprehensive feature plot # TODO: Make into function to plot for each integration
 ```{r}
 # UNCOMMENT ONLY IF YOU WANT TO SAVE THE PDF
 # Create a PDF file to save the plots
