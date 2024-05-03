@@ -126,6 +126,7 @@ plot1 | plot2
 
 
 ## Different integration methods
+  # TODO: Fix: CCAIntegration, RPCAIntegration, HarmonyIntegration, FastMNNIntegration, scVIIntegration
 ```{r}
 # Define integration methods
 integration_methods <- c("CCAIntegration", "RPCAIntegration", "HarmonyIntegration", 
