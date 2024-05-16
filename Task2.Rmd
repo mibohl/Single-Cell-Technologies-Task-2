@@ -66,6 +66,7 @@ plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap
 plot1 | plot2
 ```
 
+  
 
 ## Cluster and annotate data
 ```{r}
@@ -98,6 +99,7 @@ seurat@meta.data$region <- factor(setNames(c("ventral telen.",
                                    "non-telen.",
                                    "dorsal telen.",
                                    "non-telen.",
+                                   "dorsal telen.",
                                    "dorsal telen."),
                                  levels(seurat@active.ident))[seurat@active.ident],
                         levels=c("dorsal telen.","ventral telen.","non-telen.","mixed"))
@@ -135,11 +137,11 @@ freq_fisher <- function(conditions, have_identity){
   return(res)
 }
 
-region_enrichment <- data.frame(region = levels(seurat$region),
+region_enrichment <- data.frame(region = levels(seurat@meta.data$region),
                                 # loop and test every region
-                                t(sapply(levels(seurat$region), function(region)
+                                t(sapply(levels(seurat@meta.data$region), function(region)
                                   freq_fisher(conditions = factor(seurat$GLI3_status, levels=c("KO","WT")),
-                                              have_identity = seurat$region == region)
+                                              have_identity = seurat@meta.data$region == region)
                                 )),
                                 row.names=NULL)
 region_enrichment$padj_fisher <- p.adjust(region_enrichment$pval_fisher)
@@ -197,9 +199,41 @@ ggplot(DE_wilcoxauc_ventral, aes(x = logFC, y = -log10(padj), col=DE, label=DEG)
 
 ## Do the same wit DESeq2
 ```{r}
-det_rate <- rowMeans(seurat_ventral@assays$RNA@data)
+### test
+# Get the counts matrix
+counts <- GetAssayData(seurat_ventral, assay = "RNA", slot = "counts")
+
+# Filter genes based on detection rate
+det_rate <- rowMeans(counts > 0)
+filtered_counts <- counts[det_rate > 0.05, ]
+
+# Add metadata (assuming 'GLI3_status' is in your metadata)
+meta <- seurat_ventral@meta.data %>% 
+  mutate(GLI3_status = factor(GLI3_status, levels=c("WT","KO")))
+
+# Create DESeqDataSet
+dds <- DESeqDataSetFromMatrix(countData = filtered_counts,
+                              colData = meta,
+                              design = ~ GLI3_status)
+
+# Use the original counts for size factor calculation (not filtered)
+all_counts <- GetAssayData(seurat_ventral, assay = "RNA", slot = "counts")
+sizeFactors(dds) <- calculateSumFactors(all_counts)  
+
+# DESeq analysis
+dds <- DESeq(dds, test="LRT", reduced=~1, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)
+
+# Results and filtering
+DE_deseq2_ventral <- results(dds) %>% 
+  as.data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  mutate(DE = abs(log2FoldChange) > log2(1.1) & padj < 0.01) %>%
+  mutate(DEG = ifelse(DE, gene, NA))  # Simplified DEG calculation
+###
+
+det_rate <- rowMeans(seurat_ventral@assays$RNA$data)
 meta <- seurat_ventral@meta.data %>% mutate(GLI3_status = factor(GLI3_status, levels=c("WT","KO")))
-dds <- DESeqDataSetFromMatrix(seurat_ventral@assays$RNA@counts[det_rate > 0.05,],
+dds <- DESeqDataSetFromMatrix(seurat_ventral@assays$RNA@data[det_rate > 0.05,],
                               colData=meta,
                               design = ~ GLI3_status)
 sizeFactors(dds) <- calculateSumFactors(seurat_ventral@assays$RNA@counts[det_rate > 0.05,])
@@ -208,5 +242,32 @@ DE_deseq2_ventral <- results(dds) %>% as.data.frame() %>%
   tibble::rownames_to_column("gene") %>%
   mutate(DE = abs(log2FoldChange)>log2(1.1) & padj < 0.01) %>%
   mutate(DEG = ifelse(abs(log2FoldChange)>log2(1.1) & padj < 0.01, gene, NA))
+  
+```
 
+## Part 3
+
+```{r}
+seurat_ventral <- subset(seurat, subset = seurat_clusters == 4) %>%
+  FindVariableFeatures()
+
+# Use DefaultAssay to specify the assay
+DefaultAssay(seurat_ventral) <- "RNA" 
+
+# Calculate average expression for each organoid
+avg_expr_org <- AverageExpression(seurat_ventral, assays = "RNA", slot = "data", group.by = "organoid")
+
+# Convert to a matrix for further analysis
+avg_expr_org_matrix <- as.matrix(avg_expr_org[["RNA"]])
+
+# Filter to variable features
+avg_expr_org_filtered <- avg_expr_org_matrix[VariableFeatures(seurat_ventral),]
+
+# Remaining code (correlation and plotting) should work as before
+corr_org <- cor(avg_expr_org_matrix, method = "spearman")
+plot(hclust(as.dist(1-corr_org)))
 ``` 
+
+
+
+
