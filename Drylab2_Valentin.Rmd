@@ -186,6 +186,10 @@ Saving integrated seurat object
 saveRDS(seurat, file="integrated.rds")
 ```
 
+```{r}
+seurat <- readRDS("integrated.rds")
+```
+
 
 
 
@@ -205,6 +209,15 @@ plot1 | plot2
 ```
 
 
+Saving integrated seurat object
+
+```{r}
+saveRDS(seurat, file="clustered.rds")
+```
+
+```{r}
+seurat <- readRDS("clustered.rds")
+```
 
 8. Annotation (CSS as integration chosen)
 
@@ -223,11 +236,30 @@ dorsal telen.
 non-telen.
 "ZIC2", "TCF7L2", "LHX9"
 mixed
---> whatever clusters have markers of telencephlaon and non.telencephalon
+--> whatever clusters have markers of dorsal and ventral telencephalon
+
+
+
+
+Best markers to differentiate between the cell types:
+
+telencephalon: "FOXG1"
+
+ventral telencephalon: "DLX2"
+differentiated ventral telencephalon: "GAD1", "ISL1"
+
+
+dorsal telencephalon: "EMX1"
+
+differentiated neurons: "DCX"
+progenitor neurons: "SOX2"
+
+
 
 
 make a dotplot to check for marker genes, and if they are specific to certain clusters. --> help differentiate between markers
 ```{r}
+telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("FOXG1"), title())
 ventral_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("DLX5", "ISL1", "GAD1", "LHX8", "DLX2"))
 dorsal_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("EMX1", "NEUROD6", "EMX2"))
 non_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("ZIC2", "TCF7L2", "LHX9"))
@@ -297,6 +329,21 @@ plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2"
 plot1 | plot2
 ```
 
+9. Cell type Composition check
+
+
+```{r}
+freq <- table(seurat$region, seurat$organoid)
+prop <- apply(freq,2,function(x) x/sum(x))
+
+layout(matrix(1:3,nrow=1)); par(mar=c(8,5,1,1))
+barplot(freq, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Frequency", cex.names = 0.8)
+barplot(prop, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Proportion", cex.names = 0.8)
+plot.new()
+legend("left", fill=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"), legend=rownames(freq), bty="n")
+```
 
 
 
