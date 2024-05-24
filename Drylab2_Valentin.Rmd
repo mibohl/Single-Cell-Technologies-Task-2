@@ -1,0 +1,350 @@
+---
+title: "Drylab2_Valentin"
+author: "Valentin Baumann"
+date: "2024-05-22"
+output: html_document
+---
+
+
+General Information about the data: 
+
+We want to perform a condition comparison analysis of scRNA-seq data from:
+Fleck, Jonas Simon et al. “Inferring and perturbing cell fate regulomes in human brain organoids.” Nature vol. 621,7978 (2023): 365-372. doi:10.1038/s41586-022-05279-8
+
+
+GLI3 knock out vs WT, GLI3 required to generate cortical neural progenitor cells and neurons in human organoids.
+knockout of GLI3 leads to enrichment of the ventral telencephalon differentiation branch and depletino in other regions such as the cortex (dorsal telencephalon) --> GLI3 is important for correct dorsoventral telencephlaon diversification!
+
+Preprocessing and integration of single-cell RNA-seq data from the GLI3-KO experiment:
+Transcript count matrices (where transcripts are in rows and samples are in columns, and the number in each cell is the number of reads that mapped to exons in that each trancsript for that sample) were obtained using Cell Ranger (v.3.0.2) and further preprocessed using the Seurat R package (v.3.2)19. First, cells were filtered on the basis of UMI counts (>200, <60,000), the number of detected genes (>200, <6,000) and the fraction of mitochondrial genes (<0.1). Transcript counts were normalized to the total number of counts for that cell, multiplied by a scaling factor of 10,000 and subsequently natural-log transformed (NormalizeData()). From all protein coding, non-mitochondrial and non-ribosomal genes, we selected the 200 most variable based on the vst method (FindVariableFeatures()). PCA was performed based on the z-scaled expression of these features. Different samples were integrated using CSS21 based on the top 20 PCs with the default parameters. To visualize the dataset in two dimensions, we used UMAP on the CSS coordinates with spread = 0.5, min.dist = 0.2.
+
+Annotation of cells from the GLI3-KO and SHH experiment:
+To annotate the cell states from both the scRNA and the multiome experiments, we used the annotations of the annotated multi-omic atlas of organoid development that was previously generated. We transferred the regional branch labels using the method implemented in Seurat using the functions FindTransferAnchors() and TransferData(). We then performed Louvain clustering with a resolution 1 for the scRNA data and 0.8 for the multiome data. Clusters were manually assigned to branch identities based on the transferred labels as well as marker gene expression. In the case of the multiome data, we identified populations of mesenchymal and non-neural ectoderm cells, which were excluded from the downstream analysis.
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+1. Import necessary packages
+```{r}
+#install.packages("Seurat")
+library(Seurat)
+library(Matrix)
+library(dplyr)
+```
+
+
+2. Load the Data needed
+```{r}
+data_dir <- "/Users/valentin/Documents/ETH/Master Biotechnologie/FS24/Single Cell Technologies/Drylab2/data"
+
+counts <- Read10X(data.dir=data_dir, gene.column=1)
+meta <- read.table("data/meta.tsv.gz")
+seurat <- CreateSeuratObject(counts, meta.data = meta)
+```
+
+Just to check out the data:
+The barcode.tsv file contains a list of the different scRNA-seq samples, which all have unique barcodes (samples = cells) --> 22484 samples/cells/barcodes
+These barcodes are the names of the columns in the count matrix, while the rows are the different gene names --> 75978 genes (genes identified over all samples/cells)
+
+in Seurat object: nFeature_RNA being the number of detected genes/features; nCount_RNA being the number of detected transcripts
+In suerat we have a list of nFeature_RNA, which says how many genes are detected/sequenced in each sample/cell
+And we have a list of nCounts_RNA, which says how many transcirpts are detected/sequenced in each sample/cell
+```{r}
+counts
+seurat
+barcodes <- read.table("data/barcodes.tsv.gz", stringsAsFactors=F)[,1]
+barcodes
+```
+
+
+
+3. A step mentioned in the paper, but ignored in the tutorial -> Filtering of UMIs, genes and mt.genes:
+
+UMI counts represent the absolute number of observed transcripts (per gene, cell or sample)
+number of detected genes per cell or sample are stored in nFeature_RNA in seurat object
+number of detected transcripts per cell or sanmple are stored in nCounts_RNA in seurat object¨
+UMI counts are therefore the same as the nCounts_RNA
+
+nCount_RNA: number of UMIs per cell --> UMIs mark individual transcripts before amplification with PCR
+nFeature_RNA: number of genes detected per cell
+```{r}
+seurat[["percent.mt"]] <- PercentageFeatureSet(seurat, pattern = "^MT[-\\.]") #Calculating perecentage of mitochondrial transcripts
+seurat <- subset(seurat, subset = nFeature_RNA >200 & nFeature_RNA <6000 & percent.mt < 10 & nCount_RNA > 200 & nCount_RNA < 60000)
+# seurat@active.ident <- factor(seurat$organoid) #Should we or do we have to do this?
+```
+
+
+
+4. Normalize transcript counts, multiply by scaling factor of 10'000 and nature_log data --> (NormalizeData()):
+
+```{r}
+seurat <- NormalizeData(seurat)
+```
+
+5. Selecting variable features (FindVaribaleFeatures()), regressing out cell cylce effects (CellCycleScoring), UMAP plot based on PCA (RunPCA())
+
+```{r}
+seurat <- seurat %>% FindVariableFeatures(nfeatures = 2000) %>%
+  CellCycleScoring(s.features = cc.genes.updated.2019$s.genes,
+                   g2m.features = cc.genes.updated.2019$g2m.genes)
+VariableFeatures(seurat) <- setdiff(VariableFeatures(seurat),
+                                    c(unlist(cc.genes.updated.2019),
+                                    grep("^MT-", rownames(seurat), value=T)))
+seurat <- ScaleData(seurat, vars.to.regress = c("G2M.Score","S.Score")) %>% # should one include nFreature_RNA and nCounts_RNA here?
+  RunPCA(npcs = 20) %>%
+  RunUMAP(dims = 1:20)
+
+plot1 <- UMAPPlot(seurat, group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+
+```
+
+
+6. Data integration
+
+6.1 CSS (paper and tutorial)
+
+```{r}
+library(simspec)
+
+seurat <- cluster_sim_spectrum(seurat, label_tag = "organoid", cluster_resolution = 1)
+seurat <- RunUMAP(seurat, reduction = "css", dims = 1:ncol(Embeddings(seurat,"css")), reduction.name = "umap_css", reduction.key = "UMAPCSS_")
+plot1 <- DimPlot(seurat, reduction = "umap_css", group.by="GLI3_status") & NoAxes()
+plot1 <- DimPlot(seurat, reduction = "umap_css", group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_css", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+
+6.2 Seurat
+```{r}
+seurat_samples <- SplitObject(seurat, "organoid")
+anchors <- FindIntegrationAnchors(object.list = seurat_samples, dims = 1:20)
+seurat <- IntegrateData(anchors, dims = 1:20)
+seurat <- RunUMAP(seurat, reduction = "pca_seurat", dims = 1:20, reduction.name = "umap_seurat", reduction.key = "UMAPseurat_")
+plot1 <- DimPlot(seurat, reduction = "umap_seurat", group.by="GLI3_status") & NoAxes()
+plot1 <- DimPlot(seurat, reduction = "umap_seurat", group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_seurat", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+
+```
+
+6.3 MNN
+
+```{r}
+library(SeuratWrappers)
+seurat_samples <- SplitObject(seurat, "organoid")
+seurat_mnn <- RunFastMNN(seurat_samples)
+seurat[['mnn']] <- CreateDimReducObject(Embeddings(seurat_mnn, "mnn")[colnames(seurat),], key="MNN_")
+seurat <- RunUMAP(seurat, dims = 1:20, reduction = "mnn", reduction.name = "umap_mnn", reduction.key = "UMAPmnn_")
+plot1 <- DimPlot(seurat, reduction = "umap_mnn", group.by="GLI3_status") & NoAxes()
+plot1 <- DimPlot(seurat, reduction = "umap_mnn", group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_mnn", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+
+6.4 LIGER
+
+```{r}
+#install.packages("rliger")
+library(rliger)
+#devtools::install_github('MacoskoLab/liger')
+#devtools::install_github('satijalab/seurat-wrappers')
+seurat <- RunOptimizeALS(seurat, k = 20, lambda = 5, split.by = "organoid")
+seurat <- RunQuantileAlignSNF(seurat, split.by = "organoid")
+seurat <- RunUMAP(seurat, dims = 1:ncol(seurat[["iNMF"]]), reduction = "iNMF", reduction.name = "umap_LIGER", reduction.key = "UMAPLIGER_")
+plot1 <- DimPlot(seurat, reduction = "umap_LIGER", group.by="GLI3_status") & NoAxes()
+plot1 <- DimPlot(seurat, reduction = "umap_LIGER", group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_LIGER", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+
+6.5 Harmony
+
+```{r}
+library(harmony)
+seurat <- RunHarmony(seurat, group.by.vars = "organoid", dims.use = 1:20, max.iter.harmony = 50)
+seurat <- RunUMAP(seurat, reduction = "harmony", dims = 1:20, reduction.name = "umap_harmony", reduction.key = "UMAPharmony_")
+plot1 <- DimPlot(seurat, reduction = "umap_harmony", group.by="GLI3_status") & NoAxes()
+plot1 <- DimPlot(seurat, reduction = "umap_harmony", group.by="organoid") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), reduction = "umap_harmony", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+
+
+Saving integrated seurat object
+```{r}
+saveRDS(seurat, file="integrated.rds")
+```
+
+```{r}
+seurat <- readRDS("integrated.rds")
+```
+
+
+
+
+7. Clustering
+
+7.1 CSS
+
+```{r}
+seurat <- FindNeighbors(seurat, reduction = "css", dims = 1:ncol(Embeddings(seurat,"css"))) %>%
+  FindClusters(resolution = 0.9)
+
+plot1 <- DimPlot(seurat, reduction = "umap_css", label=T) & NoAxes() & NoLegend()
+plot2 <- FeaturePlot(seurat,
+                     c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"),
+		     reduction = "umap_css", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+
+Saving integrated seurat object
+
+```{r}
+saveRDS(seurat, file="clustered.rds")
+```
+
+```{r}
+seurat <- readRDS("clustered.rds")
+```
+
+8. Annotation (CSS as integration chosen)
+
+Find suitable marker genes for telencephalon:
+
+
+Hébert, Jean M, and Gord Fishell. “The genetics of early telencephalon patterning: some assembly required.” Nature reviews. Neuroscience vol. 9,9 (2008): 678-85. doi:10.1038/nrn2463
+
+Fleck, J.S., Jansen, S.M.J., Wollny, D. et al. Inferring and perturbing cell fate regulomes in human brain organoids. Nature 621, 365–372 (2023). https://doi.org/10.1038/s41586-022-05279-8
+
+
+ventral telen.
+"Nkx2.1", "HES1", "FGF", "PBX1", "FOXG1", "DLX5", "ISL1", "GAD1"
+dorsal telen.
+"GLI3", "Bmp4", "EMX1", "NEUROD6", "HES5", "PAX6", "HES4", "WNT", "EMX2"
+non-telen.
+"ZIC2", "TCF7L2", "LHX9"
+mixed
+--> whatever clusters have markers of dorsal and ventral telencephalon
+
+
+
+
+Best markers to differentiate between the cell types:
+
+telencephalon: "FOXG1"
+
+ventral telencephalon: "DLX2"
+differentiated ventral telencephalon: "GAD1", "ISL1"
+
+
+dorsal telencephalon: "EMX1"
+
+differentiated neurons: "DCX"
+progenitor neurons: "SOX2"
+
+
+
+
+make a dotplot to check for marker genes, and if they are specific to certain clusters. --> help differentiate between markers
+```{r}
+telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("FOXG1"), title())
+ventral_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("DLX5", "ISL1", "GAD1", "LHX8", "DLX2"))
+dorsal_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("EMX1", "NEUROD6", "EMX2"))
+non_telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("ZIC2", "TCF7L2", "LHX9"))
+telen <- DotPlot(seurat, cluster.idents = TRUE, features = c("FOXG1"))
+LGE_CGE <- DotPlot(seurat, cluster.idents = TRUE, features = c("MEIS2", "GSX2"))
+NPC <- DotPlot(seurat, cluster.idents = TRUE, features = c("HES1", "HES4", "PAX6"))
+
+a <- FeaturePlot(seurat, reduction = "umap_css", features = c("FOXG1", "DLX5", "HES1", "EMX2", "LHX9"))
+b <- DimPlot(seurat, reduction = "umap_css", group.by = "seurat_clusters", label = TRUE)
+b | a
+ventral_telen | dorsal_telen
+non_telen | telen
+NPC | LGE_CGE
+```
+Telencephalon clusters: 3, 4, 5, 6, 8, 12, 14, 15, 16, 18, 21
+
+ventral telen clusters: 3, 5, 16
+
+doral telen clusters: 6, 14, 15, 21
+
+
+non-telencephalon clusters: 1, 7, 8, 9, 10, 11, 12, 19, 20
+
+
+
+For annotation (final cluster annotation):
+
+ventral telen clusters: 3, 5, 16
+
+doral telen clusters: 6, 14, 15, 21
+
+mixed: 4, 8, 12, 18
+
+non-telencephalon clusters: 0, 1, 2, 7, 9, 10, 11, 13, 17, 19, 20
+
+
+
+
+```{r}
+seurat@meta.data$region <- factor(setNames(c("non-telen.",
+                                   "non-telen.",
+                                   "non-telen.",
+                                   "ventral telen.",
+                                   "mixed",
+                                   "ventral telen.",
+                                   "dorsal telen.",
+                                   "non-telen.",
+                                   "mixed",
+                                   "non-telen.",
+                                   "non-telen.",
+                                   "non-telen.",
+                                   "mixed",
+                                   "non-telen.",
+                                   "dorsal telen.",
+                                   "dorsal telen.",
+                                   "ventral telen.",
+                                   "non-telen.",
+                                   "mixed",
+                                   "non-telen.",
+                                   "non-telen.",
+                                   "dorsal telen."),
+                                 levels(seurat@active.ident))[seurat@active.ident],
+                        levels=c("dorsal telen.","ventral telen.","non-telen.","mixed"))
+plot1 <- DimPlot(seurat, reduction = "umap_css", group.by = "region") & NoAxes()
+plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"),
+                     reduction = "umap_css", order=T) & NoAxes() & NoLegend()
+plot1 | plot2
+```
+
+9. Cell type Composition check
+
+
+```{r}
+freq <- table(seurat$region, seurat$organoid)
+prop <- apply(freq,2,function(x) x/sum(x))
+
+layout(matrix(1:3,nrow=1)); par(mar=c(8,5,1,1))
+barplot(freq, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Frequency", cex.names = 0.8)
+barplot(prop, col=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"),
+        border=NA, las=2, ylab="Proportion", cex.names = 0.8)
+plot.new()
+legend("left", fill=c("#E74C3C","#A569BD","#76D7C4","#CCD1D1"), legend=rownames(freq), bty="n")
+```
+
+
+
+
