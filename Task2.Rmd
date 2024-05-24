@@ -40,15 +40,25 @@ seurat <- CreateSeuratObject(counts, meta.data = meta)
 
 ## routine processing
 ```{r}
+seurat[["percent.mt"]] <- PercentageFeatureSet(seurat, pattern = "^MT[-\\.]") #Calculating perecentage of mitochondrial transcripts
+
+# filter cells: 200-60k genes, <10% mt genes, 200-60k RNA counts
+seurat <- subset(seurat, subset = nFeature_RNA >200 & nFeature_RNA <6000 & percent.mt < 10 & nCount_RNA > 200 & nCount_RNA < 60000)
+
+
+
 # Normalize, find variable features, remove cell cycle genes, and scale data
 seurat <- NormalizeData(seurat) %>%
   FindVariableFeatures(nfeatures = 2000) %>%
   CellCycleScoring(s.features = cc.genes.updated.2019$s.genes, g2m.features = cc.genes.updated.2019$g2m.genes)
+
+
+
 VariableFeatures(seurat) <- setdiff(VariableFeatures(seurat), c(unlist(cc.genes.updated.2019), grep("^MT-", rownames(seurat), value=T))) # remove cell cycle genes and mitochondrial genes
 
 seurat <- ScaleData(seurat, vars.to.regress = c("G2M.Score","S.Score")) %>% # regress out cell cycle scores
   RunPCA(npcs = 20) %>% #10 PCAs as in the paper
-  RunUMAP(dims = 1:10, min.dist = 0.5, spread = 0.5)
+  RunUMAP(dims = 1:20, min.dist = 0.5, spread = 0.5)
 
 plot1 <- UMAPPlot(seurat, group.by="organoid") & NoAxes()
 plot2 <- FeaturePlot(seurat, c("FOXG1","EMX1","DLX2","MKI67"), order=T) & NoAxes() & NoLegend()
@@ -79,30 +89,29 @@ plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2"
 plot1 | plot2
 
 # TODO: annotate clusters, this is too inaccurate
-seurat@meta.data$region <- factor(setNames(c("non-telen.",
+seurat@meta.data$region <- factor(setNames(c("ventral telen.",
+                                   "ventral telen.",
                                    "non-telen.",
-                                   "mixed",
+                                   "dorsal telen.",
+                                   "non-telen.",
                                    "non-telen.",
                                    "non-telen.",
                                    "ventral telen.",
                                    "non-telen.",
                                    "dorsal telen.",
-                                   "mixed",
                                    "non-telen.",
-                                   "non-telen.",
-                                   "non-telen.",
-                                   "mixed",
-                                   "non-telen.",
-                                   "dorsal telen.",
-                                   "dorsal telen.",
                                    "ventral telen.",
                                    "non-telen.",
-                                   "mixed",
                                    "non-telen.",
-                                   "non-telen.", 
-                                  "dorsal telen."),
-                                 levels(seurat))[seurat@active.ident],
-                        levels=c("dorsal telen.","ventral telen.","non-telen.","mixed"))
+                                   "non-telen.",
+                                   "mixed",
+                                   "dorsal telen.",
+                                   "non-telen.",
+                                   "dorsal telen.",
+                                   "non-telen.",
+                                   "dorsal telen."),
+                                 levels(seurat@active.ident))[seurat@active.ident],
+                        levels=c("ventral telen.","non-telen.","dorsal telen.","mixed"))
 plot1 <- DimPlot(seurat, reduction = "umap_css", group.by = "region") & NoAxes()
 plot2 <- FeaturePlot(seurat, c("SOX2","DCX","FOXG1","EMX1","DLX2","MKI67","OTX2","HOXB2","TTR"), reduction = "umap_css", order=T) & NoAxes() & NoLegend()
 plot1 | plot2
@@ -189,18 +198,10 @@ DE_wilcoxauc_ventral <- wilcoxauc(seurat_ventral, group_by = "GLI3_status") %>%
 library(EnhancedVolcano)
 library(ggrepel)
 
-# make enhanced volcanoplot
-EnhancedVolcano(DE_wilcoxauc_ventral, x = "logFC", y = "padj", lab = DE_wilcoxauc_ventral$DEG, title = "Ventral telen.", pCutoff = 0.01, FCcutoff = log(1.1), xlim = c(-1.5,1.5))
+# this is better than Zhiso's code
+EnhancedVolcano(DE_wilcoxauc_ventral, x = "logFC", y = "padj", lab = DE_wilcoxauc_ventral$DEG, title = "Ventral telen.", pCutoff = 0.01, FCcutoff = log(1.1), xlim = c(-1,1))
 
 
-
-ggplot(DE_wilcoxauc_ventral, aes(x = logFC, y = -log10(padj), col=DE, label=DEG)) +
-  geom_point() +
-  geom_text_repel() +
-  geom_vline(xintercept=c(-log(1.1), log(1.1), 0), col="#303030", linetype="dotted") +
-  geom_hline(yintercept=-log10(0.01), col="#303030", linetype="dotted") +
-  scale_color_manual(values=c("#909090", "red")) +
-  theme_minimal()
 
 ```
 
@@ -210,7 +211,7 @@ ggplot(DE_wilcoxauc_ventral, aes(x = logFC, y = -log10(padj), col=DE, label=DEG)
 counts <- GetAssayData(seurat_ventral, assay = "RNA", slot = "counts")
 
 # Filter genes based on detection rate
-det_rate <- rowMeans(counts > 0)
+det_rate <- rowMeans(counts)
 filtered_counts <- counts[det_rate > 0.05, ]
 
 # Add metadata (assuming 'GLI3_status' is in your metadata)
@@ -228,10 +229,27 @@ sizeFactors(dds) <- calculateSumFactors(all_counts)
 # DESeq analysis
 dds <- DESeq(dds, test="LRT", reduced=~1, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)
 
+DE_deseq2_ventral <- results(dds) %>% as.data.frame() %>%
+  tibble::rownames_to_column("gene") %>%
+  mutate(DE = abs(log2FoldChange)>log2(1.1) & padj < 0.01) %>%
+  mutate(DEG = ifelse(abs(log2FoldChange)>log2(1.1) & padj < 0.01, gene, NA))
+
+
+ggplot(DE_deseq2_ventral, aes(x = log2FoldChange, y = -log10(padj), col=DE, label=DEG)) +
+  geom_point() +
+  geom_text_repel(max.overlaps = 20) +
+  geom_vline(xintercept=c(-log2(1.1), log2(1.1), 0), col="#303030", linetype="dotted") +
+  geom_hline(yintercept=-log10(0.01), col="#303030", linetype="dotted") +
+  scale_color_manual(values=c("#909090", "red")) +
+  theme_minimal()
+
 # visualize that shiat
-EnhancedVolcano(dds, x = "log2FoldChange", y = "pvalue", lab = rownames(dds), title = "Ventral telen.", pCutoff = 0.01, FCcutoff = log(1.1), xlim = c(-1.5,1.5))
+# change aspect ratio of volcano plot
+EnhancedVolcano(DE_deseq2_ventral, x = "log2FoldChange", y = "padj", lab = DE_deseq2_ventral$gene, title = "Ventral telen.", pCutoff = 0.01, FCcutoff = 1.1)
   
 ```
+
+
 ## self(=Zhisong)-implemented model
 ```{r}
 # to do DE test for one gene
@@ -281,9 +299,9 @@ DE_aov_bin <- data.frame(gene = names(which(det_rate > 0.05)), DE_aov_bin) %>%
 ## visualize the results
 ```{r}
 
-plot1 <- EnhancedVolcano(DE_aov, lab = DE_aov$DEG, x = 'condKO', y = 'pval', xlim = c(-1.5, 1.5), title = 'aov', pCutoff = 0.01, FCcutoff = 1.1)
-plot2 <- EnhancedVolcano(DE_aov_bin, lab = DE_aov_bin$DEG, x = 'condKO', y = 'pval', xlim = c(-20, 20), title = 'aov_bin', pCutoff = 0.01, FCcutoff = 1.1)
-
+plot1 <- EnhancedVolcano(DE_aov, lab = rownames(DE_aov), x = 'condKO', y = 'padj', title = 'aov', pCutoff = 0.01, FCcutoff = 0.1, xlim = c(-1,1))
+plot2 <- EnhancedVolcano(DE_aov_bin, lab = rownames(DE_aov_bin), x = 'condKO', y = 'padj', xlim = c(-20, 20), title = 'aov_bin', pCutoff = 0.01, FCcutoff = 1.1)
+plot1 | plot2
 ```
 
 
@@ -293,9 +311,6 @@ plot2 <- EnhancedVolcano(DE_aov_bin, lab = DE_aov_bin$DEG, x = 'condKO', y = 'pv
 ```{r}
 seurat_ventral <- subset(seurat, subset = seurat_clusters == 0) %>%
   FindVariableFeatures()
-
-# Use DefaultAssay to specify the assay
-DefaultAssay(seurat) <- "RNA" 
 
 # Calculate average expression for each organoid
 avg_expr_org <- AverageExpression(seurat, assays = "RNA", slot = "data", group.by = "organoid")
@@ -313,15 +328,19 @@ plot(hclust(as.dist(1-corr_org)))
 
 ## enrichment analysis
 ```{r}
-library(enrichR))
+library(enrichR)
 databases <- c("GO_Biological_Process_2018", "GO_Molecular_Function_2018", "GO_Cellular_Component_2018", "KEGG_2019_Human", "Reactome_2016", "WikiPathways_2019_Human")
-enrichment_results <- enrichR(DE_deseq2_ventral$DEG, databases = databases)
+enrichment_results <- enrichr(DE_deseq2_ventral$gene, databases = databases)
 
 ```
 
 ##GSEA
 
 ```{r}
+library(org.Hs.eg.db)
+library(clusterProfiler)
+library(ReactomePA)
+
 # define a function to perform GSEA
 GSEA <- function(gene_list) {
   gene_list <- gene_list %>% arrange(desc(log2FoldChange))
@@ -329,7 +348,7 @@ GSEA <- function(gene_list) {
   
   
   # Convert gene symbols to Entrez IDs
-  genes_entrez <- bitr(gene_list$gene_name, 
+  genes_entrez <- bitr(gene_list$gene, 
                        fromType = "SYMBOL", 
                        toType = "ENTREZID", 
                        OrgDb = org.Hs.eg.db)
@@ -342,7 +361,7 @@ GSEA <- function(gene_list) {
   
   # Merge gene_list with genes_entrez to preserve ranking order
   gene_list <- gene_list %>%
-    inner_join(genes_entrez, by = c("gene_name" = "SYMBOL"))
+    inner_join(genes_entrez, by = c("gene" = "SYMBOL"))
   
   # Check if the merging step resulted in any duplicates and ensure unique Entrez IDs
   gene_list <- gene_list %>%
@@ -368,17 +387,15 @@ GSEA <- function(gene_list) {
   
 
   return(reactome_gsea_result[order(abs(reactome_gsea_result$NES), decreasing = TRUE),])
-  
-
-
 }
+
+test <- GSEA(DE_deseq2_ventral)
 
 ```
 
 ## visualize the results
 ```{r}
-results %>% head(10) %>%
-        ggplot(aes(x = reorder(Description, NES), y = NES, size = setSize, color = p.adjust)) +
+ggplot(test, aes(x = reorder(Description, NES), y = NES, size = setSize, color = p.adjust)) +
     geom_point(alpha = 0.7) +
     coord_flip() +
     scale_color_gradient(low = "blue", high = "red") +
